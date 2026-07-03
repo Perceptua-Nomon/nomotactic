@@ -24,6 +24,8 @@ interface StreamStartResponse {
   url: string;
   host: string;
   port: string;
+  /** Access token the stream server requires as ?token= on every request. */
+  token?: string | null;
   timestamp: string;
 }
 
@@ -33,12 +35,15 @@ export function VideoFeed() {
   const [active, setActive] = useState(false);
   /** Base URL returned by stream/start (without /stream suffix). */
   const [streamBaseUrl, setStreamBaseUrl] = useState<string | null>(null);
+  /** Access token the stream server requires on every request. */
+  const [streamToken, setStreamToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const sendCommand = useDeviceCommand();
 
+  const tokenQuery = streamToken !== null ? `?token=${encodeURIComponent(streamToken)}` : "";
   /** Full MJPEG URL consumed by the <img> tag or shown to the user. */
-  const mjpegUrl = streamBaseUrl !== null ? `${streamBaseUrl}/stream` : null;
+  const mjpegUrl = streamBaseUrl !== null ? `${streamBaseUrl}/stream${tokenQuery}` : null;
 
   async function toggleStream() {
     if (busy) return;
@@ -49,6 +54,7 @@ export function VideoFeed() {
         await sendCommand(ENDPOINTS.STREAM_STOP, {});
         setActive(false);
         setStreamBaseUrl(null);
+        setStreamToken(null);
       } else {
         const resp = await sendCommand<StreamStartResponse>(ENDPOINTS.STREAM_START, {});
         // resp.url may contain the Pi's bind-all address (0.0.0.0). Reconstruct
@@ -61,6 +67,7 @@ export function VideoFeed() {
           // Malformed device URL — fall back to what the server returned
         }
         setStreamBaseUrl(baseUrl);
+        setStreamToken(resp.token ?? null);
         setActive(true);
       }
     } catch (err) {
@@ -82,9 +89,9 @@ export function VideoFeed() {
     }
 
     // Mobile: render the MJPEG stream inside a WebView using a minimal inline
-    // HTML page. The img src="/stream" is resolved against streamBaseUrl as
-    // baseUrl, so the native HTTP request goes directly to the stream server.
-    const streamHtml = `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"></head><body style="margin:0;padding:0;background:#000;overflow:hidden"><img src="/stream" style="width:100%;height:100%;object-fit:cover;display:block" /></body></html>`;
+    // HTML page. The img src="/stream?token=…" is resolved against streamBaseUrl
+    // as baseUrl, so the native HTTP request goes directly to the stream server.
+    const streamHtml = `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"></head><body style="margin:0;padding:0;background:#000;overflow:hidden"><img src="/stream${tokenQuery}" style="width:100%;height:100%;object-fit:cover;display:block" /></body></html>`;
     return (
       <WebView
         source={{ html: streamHtml, baseUrl: streamBaseUrl ?? "" }}

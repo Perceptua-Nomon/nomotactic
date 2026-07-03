@@ -3,7 +3,11 @@
  *
  * Manages login, registration, logout, and automatic token refresh.
  * Handles both central-mode auth and device-mode pairing.
- * Stores tokens in expo-secure-store on mobile and localStorage on web.
+ *
+ * Token storage: expo-secure-store (OS keychain) on mobile. On web, access
+ * tokens live in React state only (never in browser storage) and refresh
+ * tokens use tab-scoped sessionStorage; only non-sensitive data (device URL)
+ * uses localStorage. See security checklist X6–X8.
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
