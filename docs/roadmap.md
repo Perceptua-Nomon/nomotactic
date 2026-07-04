@@ -16,6 +16,7 @@
 | 8 | Device Fleet Registration | ✅ Complete |
 | 15 | Soft AP / WiFi Provisioning | ✅ Complete (cross-repo; see nomopractic ADR-005) |
 | 4 | Fleet Management Dashboard | ✅ Complete (cross-repo; see nomothetic Phase 25) |
+| 3 | AI Integration | 🔶 Chat + actions complete (cross-repo; see nomothetic Phase 26); suggestions & voice deferred |
 
 ---
 
@@ -29,7 +30,8 @@ Phases 1, 2, 2.1, and 2.2 are complete (BLE phases superseded by Phase 15 — Wi
 - Web landing page for unauthenticated visitors
 - Wi-Fi Soft AP pairing: HTTP pairing flow (`POST /api/device/auth/pair/ap`) accessible at `http://192.168.4.1:8080` (plain HTTP, nomothetic ADR-015)
 - Connection state indicator with auto-reconnect
-- AI-ready command input bar
+- AI command bar wired to the device's Claude relay (chat with conversation
+  context, robot action chips, inline on-robot API-key setup)
 - Guest mode: unauthenticated users can pair via Soft AP without an account
 - Local device registry: Soft-AP-paired devices appear on the dashboard with a "Local" badge
 - `npx expo lint` clean
@@ -590,12 +592,38 @@ the client relays it to the central API to create the fleet record.
 
 ---
 
-### Phase 3 — AI Integration (Planned)
+### Phase 3 — AI Integration 🔶 Chat + actions complete
 
-- Connect `CommandInput` to a real AI/LLM endpoint
-- Rich response rendering (tables, action confirmations, device state)
-- Context-aware command suggestions
-- Voice input option (tap-to-speak)
+Cross-repo phase (paired with nomothetic Phase 26: the device-mode AI
+chat-command relay). The command bar now talks to a real Claude endpoint on
+the device; the model acts on the robot through a destructive-free tool
+surface that reuses the same validation, TTL leases, and device JWT auth as
+the manual controls.
+
+**Delivered:**
+- [x] `lib/ai.ts` — typed client for the device relay:
+      `sendAiCommand(messages)` (long 180 s timeout — the loop can span several
+      provider round trips), key management (`getAiKeyStatus` / `setAiKey` /
+      `clearAiKey`), `trimHistory` (client-side context cap under the device's
+      40-message limit), and `isKeyProblem` (distinguishes "needs a key" /
+      "key rejected" failures from provider outages).
+- [x] `components/CommandInput.tsx` — rewired from the Phase 1.6 stub:
+  - Sends the visible conversation (plain-text turns) so follow-ups have
+    context; successful exchanges extend the history, "Clear" resets it.
+  - Response bubble renders the reply plus ✓/✕ **action chips** for every
+    robot action the model took (drive, steer, sensor reads, routines, ...).
+  - Inline Anthropic-key setup appears when the device reports a key problem;
+    the key is submitted to `PUT /api/ai/key` and **stored on the robot**
+    (0600 file), never in the app or browser storage (web builds cannot
+    leak it).
+- [x] `lib/endpoints.ts` — `AI_KEY`, `AI_COMMAND`.
+- [x] Tests: `tests/lib/ai.test.ts` (fetch-mocked, mirroring the other lib
+      suites) — request shapes, history trimming, key-problem detection.
+
+**Deferred to a follow-up:**
+- [ ] Context-aware command suggestions
+- [ ] Voice input option (tap-to-speak)
+- [ ] Richer response rendering (tables, structured device state)
 
 ### Phase 4 — Fleet Management Dashboard ✅ Complete
 

@@ -1,6 +1,7 @@
 # ADR-002: AI-Ready UX Pattern
 
-**Status:** Accepted  
+**Status:** Accepted (implemented — Phase 3 wired the bar to the device's
+Claude relay, nomothetic Phase 26; see the Future section for what remains)  
 **Date:** 2026-04-10  
 **Deciders:** Perceptua  
 
@@ -91,7 +92,9 @@ app layout (option 2).
 
 ## Future
 
-- Connect to a nomothetic AI endpoint (LLM-powered command interpretation)
-- Rich response types (action confirmations, sensor visualizations)
+- ~~Connect to a nomothetic AI endpoint (LLM-powered command interpretation)~~
+  ✅ Phase 3: `POST /api/ai/command` (nomothetic Phase 26) with conversation
+  context, robot action chips, and inline on-robot API-key setup
+- Rich response types (action confirmations beyond chips, sensor visualizations)
 - Voice input via device microphone (tap-to-speak in the command bar)
 - Context-aware suggestions (auto-complete based on device state)
