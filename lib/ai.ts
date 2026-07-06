@@ -96,6 +96,32 @@ export function isKeyProblem(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Turn a failed command into a clear, actionable message for the operator.
+ *
+ * `isKeyProblem` drives the separate key-entry affordance; this covers every
+ * other failure. The important case is a request that never reached the device
+ * at all (`ApiRequestError` with `status === 0`, the client's sentinel for "no
+ * HTTP response"): the raw "Network error" / "Failed to fetch" text reads like
+ * the app did nothing, so we say plainly that the device was unreachable.
+ */
+export function describeCommandError(err: unknown): string {
+  if (err instanceof ApiRequestError) {
+    if (err.status === 0) {
+      if (/tim(e|ed) out/i.test(err.message)) {
+        return "The device took too long to respond. Check it's online and try again.";
+      }
+      return "Couldn't reach the device. Check it's powered on and you're connected to it.";
+    }
+    if (err.status === 401) {
+      return "Your device session expired. Reconnect to the device and try again.";
+    }
+    return err.message;
+  }
+  const message = (err as Error | undefined)?.message;
+  return message && message.length > 0 ? message : "Something went wrong. Try again.";
+}
+
 // ---------------------------------------------------------------------------
 // Device API calls
 // ---------------------------------------------------------------------------

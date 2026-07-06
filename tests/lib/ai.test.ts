@@ -5,6 +5,7 @@
 import {
   AiChatMessage,
   clearAiKey,
+  describeCommandError,
   getAiKeyStatus,
   isKeyProblem,
   MAX_HISTORY_MESSAGES,
@@ -186,5 +187,41 @@ describe("isKeyProblem", () => {
     expect(isKeyProblem(new ApiRequestError("Request timed out", 0))).toBe(false);
     expect(isKeyProblem(new Error("boom"))).toBe(false);
     expect(isKeyProblem(undefined)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// describeCommandError
+// ---------------------------------------------------------------------------
+
+describe("describeCommandError", () => {
+  it("explains an unreachable device for a network error (status 0)", () => {
+    const msg = describeCommandError(new ApiRequestError("Network error", 0));
+    expect(msg).toMatch(/couldn't reach the device/i);
+    // The raw transport text must not leak through as the whole message.
+    expect(msg).not.toBe("Network error");
+  });
+
+  it("explains a timeout distinctly from a plain network failure", () => {
+    const msg = describeCommandError(new ApiRequestError("Request timed out", 0));
+    expect(msg).toMatch(/too long to respond/i);
+  });
+
+  it("tells the user to reconnect on a 401", () => {
+    const msg = describeCommandError(new ApiRequestError("Unauthorized", 401));
+    expect(msg).toMatch(/session expired/i);
+  });
+
+  it("passes through a device-supplied message for other HTTP errors", () => {
+    const msg = describeCommandError(
+      new ApiRequestError("HAT daemon unavailable", 503),
+    );
+    expect(msg).toBe("HAT daemon unavailable");
+  });
+
+  it("falls back for a non-API error", () => {
+    expect(describeCommandError(new Error("boom"))).toBe("boom");
+    expect(describeCommandError(undefined)).toMatch(/something went wrong/i);
+    expect(describeCommandError({})).toMatch(/something went wrong/i);
   });
 });

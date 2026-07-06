@@ -23,11 +23,13 @@ import {
 import {
     AiActionRecord,
     AiChatMessage,
+    describeCommandError,
     isKeyProblem,
     sendAiCommand,
     setAiKey,
     trimHistory,
 } from "@/lib/ai";
+import { useAuth } from "@/lib/auth";
 import { borderRadius, colors, spacing } from "@/lib/theme";
 
 /** The latest reply shown in the response bubble, with its robot actions. */
@@ -56,6 +58,11 @@ function ActionChips({ actions }: { actions: AiActionRecord[] }) {
 }
 
 export function CommandInput() {
+  // AI commands run through the device's Claude relay (device JWT auth), so the
+  // bar is only usable once a device session exists — the same connection the
+  // cockpit controls require. Without it, a send would fire a doomed request at
+  // the (possibly offline/unreachable) device URL and look like it did nothing.
+  const { isDevicePaired } = useAuth();
   const [text, setText] = useState("");
   const [history, setHistory] = useState<AiChatMessage[]>([]);
   const [exchange, setExchange] = useState<Exchange | null>(null);
@@ -69,7 +76,9 @@ export function CommandInput() {
 
   async function submit() {
     const trimmed = text.trim();
-    if (trimmed.length === 0 || isLoading) return;
+    // No device session → the relay is unreachable; don't fire a doomed
+    // request (the button is also disabled, but guard the keyboard-send path).
+    if (trimmed.length === 0 || isLoading || !isDevicePaired) return;
     setIsLoading(true);
     setError(null);
     setNotice(null);
@@ -81,8 +90,10 @@ export function CommandInput() {
       setText("");
     } catch (err) {
       if (isKeyProblem(err)) setNeedsKey(true);
-      // Keep the typed command so the user can retry after fixing the cause.
-      setError((err as Error).message);
+      // Keep the typed command so the user can retry after fixing the cause,
+      // and show a message that explains an unreachable device rather than a
+      // bare "Network error" (which reads as "nothing happened").
+      setError(describeCommandError(err));
     } finally {
       setIsLoading(false);
     }
@@ -119,10 +130,19 @@ export function CommandInput() {
       : {};
 
   const showBubble = isLoading || error !== null || notice !== null || exchange !== null;
+  const canSend = isDevicePaired && !isLoading && text.trim().length > 0;
 
   return (
     <Wrapper style={styles.container} {...wrapperProps}>
-      {needsKey && (
+      {!isDevicePaired && (
+        <View style={styles.responseBubble}>
+          <Text style={styles.responseText}>
+            Connect to a device to use AI commands.
+          </Text>
+        </View>
+      )}
+
+      {isDevicePaired && needsKey && (
         <View style={styles.responseBubble}>
           <Text style={styles.responseText}>
             AI commands need an Anthropic API key. It is stored on the robot itself, never in
@@ -161,7 +181,7 @@ export function CommandInput() {
         </View>
       )}
 
-      {!needsKey && showBubble && (
+      {isDevicePaired && !needsKey && showBubble && (
         <View style={styles.responseBubble}>
           {isLoading ? (
             <View style={styles.thinkingRow}>
@@ -198,18 +218,20 @@ export function CommandInput() {
       <View style={styles.inputRow}>
         <TextInput
           style={styles.input}
-          placeholder="Ask nomon something..."
+          placeholder={
+            isDevicePaired ? "Ask nomon something..." : "Connect a device to chat"
+          }
           placeholderTextColor={colors.textMuted}
           value={text}
           onChangeText={setText}
           onSubmitEditing={submit}
           returnKeyType="send"
-          editable={!isLoading}
+          editable={isDevicePaired && !isLoading}
         />
         <Pressable
-          style={[styles.sendButton, isLoading && styles.sendButtonDisabled]}
+          style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
           onPress={submit}
-          disabled={isLoading || text.trim().length === 0}
+          disabled={!canSend}
           accessibilityRole="button"
           accessibilityLabel="Send command"
         >
