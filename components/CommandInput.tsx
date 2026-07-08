@@ -1,12 +1,16 @@
 /**
- * CommandInput — persistent AI-ready command bar.
+ * CommandInput — persistent AI command bar.
  *
- * Text input with submit button at the bottom of the authenticated
- * layout. Initially wired to a stub handler. See ADR-002.
+ * Sends the operator's chat to the device's Claude relay (POST /api/ai/command)
+ * with the visible conversation as context, renders the reply plus the robot
+ * actions the model took (drive, steer, sensor reads, routines, ...), and
+ * offers inline Anthropic-key setup when the device reports it has no usable
+ * key. The key is stored on the robot, never in the app. See ADR-002.
  */
 
 import React, { useState } from "react";
 import {
+    ActivityIndicator,
     KeyboardAvoidingView,
     Platform,
     Pressable,
@@ -16,31 +20,107 @@ import {
     View,
 } from "react-native";
 
+import {
+    AiActionRecord,
+    AiChatMessage,
+    describeCommandError,
+    isKeyProblem,
+    sendAiCommand,
+    setAiKey,
+    trimHistory,
+} from "@/lib/ai";
+import { useAuth } from "@/lib/auth";
 import { borderRadius, colors, spacing } from "@/lib/theme";
 
-/** Stub handler — replaced by a real AI endpoint in a future phase. */
-async function handleCommand(input: string): Promise<string> {
-  return `Command received: "${input}". AI processing is not yet available.`;
+/** The latest reply shown in the response bubble, with its robot actions. */
+interface Exchange {
+  reply: string;
+  actions: AiActionRecord[];
+}
+
+/** Compact ✓/✕ chips for the robot actions taken while handling a command. */
+function ActionChips({ actions }: { actions: AiActionRecord[] }) {
+  if (actions.length === 0) return null;
+  return (
+    <View style={styles.actionRow}>
+      {actions.map((action, index) => (
+        <View
+          key={`${action.tool}-${index}`}
+          style={[styles.actionChip, !action.ok && styles.actionChipFailed]}
+        >
+          <Text style={[styles.actionChipText, !action.ok && styles.actionChipTextFailed]}>
+            {action.ok ? "✓" : "✕"} {action.tool}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
 }
 
 export function CommandInput() {
+  // AI commands run through the device's Claude relay (device JWT auth), so the
+  // bar is only usable once a device session exists — the same connection the
+  // cockpit controls require. Without it, a send would fire a doomed request at
+  // the (possibly offline/unreachable) device URL and look like it did nothing.
+  const { isDevicePaired } = useAuth();
   const [text, setText] = useState("");
-  const [response, setResponse] = useState<string | null>(null);
+  const [history, setHistory] = useState<AiChatMessage[]>([]);
+  const [exchange, setExchange] = useState<Exchange | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Inline Anthropic-key setup, shown when the device reports a key problem.
+  const [needsKey, setNeedsKey] = useState(false);
+  const [keyText, setKeyText] = useState("");
+  const [isSavingKey, setIsSavingKey] = useState(false);
 
   async function submit() {
     const trimmed = text.trim();
-    if (trimmed.length === 0 || isLoading) return;
+    // No device session → the relay is unreachable; don't fire a doomed
+    // request (the button is also disabled, but guard the keyboard-send path).
+    if (trimmed.length === 0 || isLoading || !isDevicePaired) return;
     setIsLoading(true);
+    setError(null);
+    setNotice(null);
+    const messages = trimHistory([...history, { role: "user", content: trimmed }]);
     try {
-      const result = await handleCommand(trimmed);
-      setResponse(result);
+      const resp = await sendAiCommand(messages);
+      setExchange({ reply: resp.reply, actions: resp.actions });
+      setHistory([...messages, { role: "assistant", content: resp.reply }]);
+      setText("");
     } catch (err) {
-      setResponse((err as Error).message);
+      if (isKeyProblem(err)) setNeedsKey(true);
+      // Keep the typed command so the user can retry after fixing the cause,
+      // and show a message that explains an unreachable device rather than a
+      // bare "Network error" (which reads as "nothing happened").
+      setError(describeCommandError(err));
     } finally {
       setIsLoading(false);
-      setText("");
     }
+  }
+
+  async function saveKey() {
+    const trimmed = keyText.trim();
+    if (trimmed.length === 0 || isSavingKey) return;
+    setIsSavingKey(true);
+    setError(null);
+    try {
+      await setAiKey(trimmed);
+      setKeyText("");
+      setNeedsKey(false);
+      setNotice("API key saved on the robot — send your command again.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setIsSavingKey(false);
+    }
+  }
+
+  function clearConversation() {
+    setHistory([]);
+    setExchange(null);
+    setError(null);
+    setNotice(null);
   }
 
   const Wrapper = Platform.OS === "web" ? View : KeyboardAvoidingView;
@@ -49,30 +129,117 @@ export function CommandInput() {
       ? { behavior: "padding" as const, keyboardVerticalOffset: 90 }
       : {};
 
+  const showBubble = isLoading || error !== null || notice !== null || exchange !== null;
+  const canSend = isDevicePaired && !isLoading && text.trim().length > 0;
+
   return (
     <Wrapper style={styles.container} {...wrapperProps}>
-      {response !== null && (
+      {!isDevicePaired && (
         <View style={styles.responseBubble}>
-          <Text style={styles.responseText}>{response}</Text>
+          <Text style={styles.responseText}>
+            Connect to a device to use AI commands.
+          </Text>
         </View>
       )}
+
+      {isDevicePaired && needsKey && (
+        <View style={styles.responseBubble}>
+          <Text style={styles.responseText}>
+            AI commands need an Anthropic API key. It is stored on the robot itself, never in
+            the app.
+          </Text>
+          <View style={styles.keyRow}>
+            <TextInput
+              style={styles.input}
+              placeholder="sk-ant-..."
+              placeholderTextColor={colors.textMuted}
+              value={keyText}
+              onChangeText={setKeyText}
+              onSubmitEditing={saveKey}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isSavingKey}
+            />
+            <Pressable
+              style={[
+                styles.sendButton,
+                (isSavingKey || keyText.trim().length === 0) && styles.sendButtonDisabled,
+              ]}
+              onPress={saveKey}
+              disabled={isSavingKey || keyText.trim().length === 0}
+              accessibilityRole="button"
+              accessibilityLabel="Save API key"
+            >
+              {isSavingKey ? (
+                <ActivityIndicator size="small" color={colors.background} />
+              ) : (
+                <Text style={styles.sendText}>✓</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {isDevicePaired && !needsKey && showBubble && (
+        <View style={styles.responseBubble}>
+          {isLoading ? (
+            <View style={styles.thinkingRow}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.thinkingText}>nomon is thinking…</Text>
+            </View>
+          ) : error !== null ? (
+            <Text style={styles.errorText}>{error}</Text>
+          ) : notice !== null ? (
+            <Text style={styles.responseText}>{notice}</Text>
+          ) : exchange !== null ? (
+            <>
+              <Text style={styles.responseText}>{exchange.reply}</Text>
+              <ActionChips actions={exchange.actions} />
+            </>
+          ) : null}
+        </View>
+      )}
+
+      {history.length > 0 && !isLoading && (
+        <Pressable
+          onPress={clearConversation}
+          style={styles.clearRow}
+          accessibilityRole="button"
+          accessibilityLabel="Clear conversation"
+        >
+          <Text style={styles.clearText}>
+            Conversation: {Math.ceil(history.length / 2)} exchange
+            {history.length > 2 ? "s" : ""} · Clear
+          </Text>
+        </Pressable>
+      )}
+
       <View style={styles.inputRow}>
         <TextInput
           style={styles.input}
-          placeholder="Ask nomon something..."
+          placeholder={
+            isDevicePaired ? "Ask nomon something..." : "Connect a device to chat"
+          }
           placeholderTextColor={colors.textMuted}
           value={text}
           onChangeText={setText}
           onSubmitEditing={submit}
           returnKeyType="send"
-          editable={!isLoading}
+          editable={isDevicePaired && !isLoading}
         />
         <Pressable
-          style={[styles.sendButton, isLoading && styles.sendButtonDisabled]}
+          style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
           onPress={submit}
-          disabled={isLoading || text.trim().length === 0}
+          disabled={!canSend}
+          accessibilityRole="button"
+          accessibilityLabel="Send command"
         >
-          <Text style={styles.sendText}>↑</Text>
+          {isLoading ? (
+            <ActivityIndicator size="small" color={colors.background} />
+          ) : (
+            <Text style={styles.sendText}>↑</Text>
+          )}
         </Pressable>
       </View>
     </Wrapper>
@@ -96,6 +263,56 @@ const styles = StyleSheet.create({
   responseText: {
     color: colors.textSecondary,
     fontSize: 14,
+  },
+  errorText: {
+    color: colors.error,
+    fontSize: 14,
+  },
+  thinkingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  thinkingText: {
+    color: colors.textMuted,
+    fontSize: 14,
+  },
+  actionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  actionChip: {
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  actionChipFailed: {
+    borderColor: colors.error,
+  },
+  actionChipText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  actionChipTextFailed: {
+    color: colors.error,
+  },
+  clearRow: {
+    marginBottom: spacing.sm,
+    alignSelf: "flex-start",
+  },
+  clearText: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  keyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: spacing.sm,
   },
   inputRow: {
     flexDirection: "row",

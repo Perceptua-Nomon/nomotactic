@@ -49,3 +49,7 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Claude Code local config
+CLAUDE.md
+.claude/

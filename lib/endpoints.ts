@@ -21,4 +21,6 @@ export const ENDPOINTS = {
   ROUTINE_HEARTBEAT: "/api/routines/heartbeat",
   ROUTINE_STOP: "/api/routines/stop",
   ROUTINE_STOP_ALL: "/api/routines/stop-all",
+  AI_KEY: "/api/ai/key",
+  AI_COMMAND: "/api/ai/command",
 } as const;
