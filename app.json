@@ -54,7 +54,13 @@
       ],
       "./plugins/apModeTlsPlugin",
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone for voice commands."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

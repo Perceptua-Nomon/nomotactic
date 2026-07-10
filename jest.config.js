@@ -19,5 +19,7 @@ module.exports = {
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
     "^react-native$": "<rootDir>/tests/__mocks__/react-native.js",
+    "^expo-audio$": "<rootDir>/tests/__mocks__/expo-audio.js",
+    "^expo-speech$": "<rootDir>/tests/__mocks__/expo-speech.js",
   },
 };

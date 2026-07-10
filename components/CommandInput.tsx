@@ -6,8 +6,15 @@
  * actions the model took (drive, steer, sensor reads, routines, ...), and
  * offers inline Anthropic-key setup when the device reports it has no usable
  * key. The key is stored on the robot, never in the app. See ADR-002.
+ *
+ * Voice commands (ADR-004): the mic button records a clip with expo-audio,
+ * the robot transcribes it (POST /api/ai/transcribe, nomothetic ADR-020), and
+ * the transcript auto-sends through the same submit path. Replies to voice
+ * commands are spoken aloud unless muted.
  */
 
+import { Ionicons } from "@expo/vector-icons";
+import { useAudioRecorder } from "expo-audio";
 import React, { useState } from "react";
 import {
     ActivityIndicator,
@@ -31,11 +38,24 @@ import {
 } from "@/lib/ai";
 import { useAuth } from "@/lib/auth";
 import { borderRadius, colors, spacing } from "@/lib/theme";
+import {
+    describeVoiceError,
+    ensureMicPermission,
+    enterRecordingMode,
+    exitRecordingMode,
+    isVoiceInputAvailable,
+    speak,
+    stopSpeaking,
+    transcribeAudio,
+    VOICE_RECORDING_OPTIONS,
+} from "@/lib/voice";
 
 /** The latest reply shown in the response bubble, with its robot actions. */
 interface Exchange {
   reply: string;
   actions: AiActionRecord[];
+  /** True when the command arrived by voice — replies are spoken unless muted. */
+  viaVoice: boolean;
 }
 
 /** Compact ✓/✕ chips for the robot actions taken while handling a command. */
@@ -73,21 +93,29 @@ export function CommandInput() {
   const [needsKey, setNeedsKey] = useState(false);
   const [keyText, setKeyText] = useState("");
   const [isSavingKey, setIsSavingKey] = useState(false);
+  // Voice: record on the phone, transcribe on the robot, speak the reply.
+  const voiceAvailable = isVoiceInputAvailable();
+  const recorder = useAudioRecorder(VOICE_RECORDING_OPTIONS);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [repliesMuted, setRepliesMuted] = useState(false);
 
-  async function submit() {
-    const trimmed = text.trim();
+  async function submit(overrideText?: string, viaVoice = false) {
+    const trimmed = (overrideText ?? text).trim();
     // No device session → the relay is unreachable; don't fire a doomed
     // request (the button is also disabled, but guard the keyboard-send path).
     if (trimmed.length === 0 || isLoading || !isDevicePaired) return;
+    stopSpeaking();
     setIsLoading(true);
     setError(null);
     setNotice(null);
     const messages = trimHistory([...history, { role: "user", content: trimmed }]);
     try {
       const resp = await sendAiCommand(messages);
-      setExchange({ reply: resp.reply, actions: resp.actions });
+      setExchange({ reply: resp.reply, actions: resp.actions, viaVoice });
       setHistory([...messages, { role: "assistant", content: resp.reply }]);
       setText("");
+      if (viaVoice && !repliesMuted) speak(resp.reply);
     } catch (err) {
       if (isKeyProblem(err)) setNeedsKey(true);
       // Keep the typed command so the user can retry after fixing the cause,
@@ -97,6 +125,65 @@ export function CommandInput() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function startVoice() {
+    stopSpeaking();
+    setError(null);
+    setNotice(null);
+    const granted = await ensureMicPermission();
+    if (!granted) {
+      setError("Microphone permission is needed for voice commands.");
+      return;
+    }
+    try {
+      await enterRecordingMode();
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setIsRecording(true);
+    } catch (err) {
+      setError(describeVoiceError(err));
+    }
+  }
+
+  async function finishVoice() {
+    setIsRecording(false);
+    setIsTranscribing(true);
+    try {
+      await recorder.stop();
+      await exitRecordingMode();
+      const uri = recorder.uri;
+      if (!uri) {
+        setError("Recording failed. Try again.");
+        return;
+      }
+      const transcript = (await transcribeAudio(uri)).trim();
+      if (transcript.length === 0) {
+        setNotice("Didn't catch that — tap the mic and try again.");
+        return;
+      }
+      // Show what the robot heard, then send it through the normal path.
+      setText(transcript);
+      await submit(transcript, true);
+    } catch (err) {
+      setError(describeVoiceError(err));
+    } finally {
+      setIsTranscribing(false);
+    }
+  }
+
+  function toggleVoice() {
+    if (isLoading || isTranscribing) return;
+    if (isRecording) {
+      void finishVoice();
+    } else {
+      void startVoice();
+    }
+  }
+
+  function toggleMuted() {
+    if (!repliesMuted) stopSpeaking();
+    setRepliesMuted(!repliesMuted);
   }
 
   async function saveKey() {
@@ -117,6 +204,7 @@ export function CommandInput() {
   }
 
   function clearConversation() {
+    stopSpeaking();
     setHistory([]);
     setExchange(null);
     setError(null);
@@ -129,8 +217,15 @@ export function CommandInput() {
       ? { behavior: "padding" as const, keyboardVerticalOffset: 90 }
       : {};
 
-  const showBubble = isLoading || error !== null || notice !== null || exchange !== null;
-  const canSend = isDevicePaired && !isLoading && text.trim().length > 0;
+  const showBubble =
+    isLoading ||
+    isRecording ||
+    isTranscribing ||
+    error !== null ||
+    notice !== null ||
+    exchange !== null;
+  const canSend = isDevicePaired && !isLoading && !isTranscribing && text.trim().length > 0;
+  const showMic = voiceAvailable && isDevicePaired && !needsKey;
 
   return (
     <Wrapper style={styles.container} {...wrapperProps}>
@@ -183,7 +278,17 @@ export function CommandInput() {
 
       {isDevicePaired && !needsKey && showBubble && (
         <View style={styles.responseBubble}>
-          {isLoading ? (
+          {isRecording ? (
+            <View style={styles.thinkingRow}>
+              <Ionicons name="mic" size={16} color={colors.error} />
+              <Text style={styles.thinkingText}>Listening… tap the mic to finish.</Text>
+            </View>
+          ) : isTranscribing ? (
+            <View style={styles.thinkingRow}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.thinkingText}>Transcribing…</Text>
+            </View>
+          ) : isLoading ? (
             <View style={styles.thinkingRow}>
               <ActivityIndicator size="small" color={colors.primary} />
               <Text style={styles.thinkingText}>nomon is thinking…</Text>
@@ -196,6 +301,25 @@ export function CommandInput() {
             <>
               <Text style={styles.responseText}>{exchange.reply}</Text>
               <ActionChips actions={exchange.actions} />
+              {exchange.viaVoice && (
+                <Pressable
+                  onPress={toggleMuted}
+                  style={styles.muteRow}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    repliesMuted ? "Unmute spoken replies" : "Mute spoken replies"
+                  }
+                >
+                  <Ionicons
+                    name={repliesMuted ? "volume-mute" : "volume-high"}
+                    size={14}
+                    color={colors.textMuted}
+                  />
+                  <Text style={styles.muteText}>
+                    {repliesMuted ? "Replies muted" : "Speaking replies"}
+                  </Text>
+                </Pressable>
+              )}
             </>
           ) : null}
         </View>
@@ -224,13 +348,36 @@ export function CommandInput() {
           placeholderTextColor={colors.textMuted}
           value={text}
           onChangeText={setText}
-          onSubmitEditing={submit}
+          onSubmitEditing={() => submit()}
           returnKeyType="send"
-          editable={isDevicePaired && !isLoading}
+          editable={isDevicePaired && !isLoading && !isTranscribing}
         />
+        {showMic && (
+          <Pressable
+            style={[
+              styles.micButton,
+              isRecording && styles.micButtonActive,
+              (isLoading || isTranscribing) && styles.sendButtonDisabled,
+            ]}
+            onPress={toggleVoice}
+            disabled={isLoading || isTranscribing}
+            accessibilityRole="button"
+            accessibilityLabel={isRecording ? "Stop recording" : "Start voice command"}
+          >
+            {isTranscribing ? (
+              <ActivityIndicator size="small" color={colors.background} />
+            ) : (
+              <Ionicons
+                name={isRecording ? "stop" : "mic"}
+                size={18}
+                color={colors.background}
+              />
+            )}
+          </Pressable>
+        )}
         <Pressable
           style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
-          onPress={submit}
+          onPress={() => submit()}
           disabled={!canSend}
           accessibilityRole="button"
           accessibilityLabel="Send command"
@@ -301,6 +448,17 @@ const styles = StyleSheet.create({
   actionChipTextFailed: {
     color: colors.error,
   },
+  muteRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    alignSelf: "flex-start",
+  },
+  muteText: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
   clearRow: {
     marginBottom: spacing.sm,
     alignSelf: "flex-start",
@@ -329,6 +487,18 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
     marginRight: spacing.sm,
+  },
+  micButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: spacing.sm,
+  },
+  micButtonActive: {
+    backgroundColor: colors.error,
   },
   sendButton: {
     width: 36,

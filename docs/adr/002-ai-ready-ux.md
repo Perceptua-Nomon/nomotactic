@@ -96,5 +96,8 @@ app layout (option 2).
   ✅ Phase 3: `POST /api/ai/command` (nomothetic Phase 26) with conversation
   context, robot action chips, and inline on-robot API-key setup
 - Rich response types (action confirmations beyond chips, sensor visualizations)
-- Voice input via device microphone (tap-to-speak in the command bar)
+- ~~Voice input via device microphone (tap-to-speak in the command bar)~~
+  ✅ Phase 3 follow-up: mic button records with expo-audio, the robot
+  transcribes (`POST /api/ai/transcribe`, nomothetic Phase 28), the transcript
+  auto-sends, and replies are spoken with expo-speech — see ADR-004
 - Context-aware suggestions (auto-complete based on device state)

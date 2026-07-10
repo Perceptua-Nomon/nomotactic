@@ -16,7 +16,7 @@
 | 8 | Device Fleet Registration | ✅ Complete |
 | 15 | Soft AP / WiFi Provisioning | ✅ Complete (cross-repo; see nomopractic ADR-005) |
 | 4 | Fleet Management Dashboard | ✅ Complete (cross-repo; see nomothetic Phase 25) |
-| 3 | AI Integration | 🔶 Chat + actions complete (cross-repo; see nomothetic Phase 26); suggestions & voice deferred |
+| 3 | AI Integration | 🔶 Chat + actions + voice complete (cross-repo; see nomothetic Phases 26 & 28); suggestions & richer rendering deferred |
 
 ---
 
@@ -32,6 +32,9 @@ Phases 1, 2, 2.1, and 2.2 are complete (BLE phases superseded by Phase 15 — Wi
 - Connection state indicator with auto-reconnect
 - AI command bar wired to the device's Claude relay (chat with conversation
   context, robot action chips, inline on-robot API-key setup)
+- Voice commands: mic button records with expo-audio, the robot transcribes
+  (nomothetic Phase 28), the transcript auto-sends, replies are spoken
+  (expo-speech) with a mute toggle — works in Expo Go and on web (ADR-004)
 - Guest mode: unauthenticated users can pair via Soft AP without an account
 - Local device registry: Soft-AP-paired devices appear on the dashboard with a "Local" badge
 - `npx expo lint` clean
@@ -620,9 +623,22 @@ the manual controls.
 - [x] Tests: `tests/lib/ai.test.ts` (fetch-mocked, mirroring the other lib
       suites) — request shapes, history trimming, key-problem detection.
 
+**Delivered in the voice follow-up (2026-07-09, cross-repo with nomothetic
+Phase 28; see ADR-004):**
+- [x] Voice input (tap-to-speak): `lib/voice.ts` records with expo-audio,
+      uploads to the robot's `POST /api/ai/transcribe` (multipart, device JWT,
+      new `formData` option in `lib/api.ts`), and the transcript auto-sends
+      through the normal command path. Mic button with Listening/Transcribing
+      states in `CommandInput`; hidden when the platform can't record.
+- [x] Spoken replies: voice-initiated replies are read aloud with expo-speech,
+      with an inline mute toggle; speech stops when a new command starts.
+- [x] Tests: `tests/lib/voice.test.ts` (fetch-mocked upload, error mapping,
+      speak gating; expo modules mocked via jest moduleNameMapper).
+- [x] Works in Expo Go and on web — expo-audio/expo-speech are official Expo
+      modules, no dev build required.
+
 **Deferred to a follow-up:**
 - [ ] Context-aware command suggestions
-- [ ] Voice input option (tap-to-speak)
 - [ ] Richer response rendering (tables, structured device state)
 
 ### Phase 4 — Fleet Management Dashboard ✅ Complete

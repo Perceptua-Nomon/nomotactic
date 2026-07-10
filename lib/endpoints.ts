@@ -23,4 +23,5 @@ export const ENDPOINTS = {
   ROUTINE_STOP_ALL: "/api/routines/stop-all",
   AI_KEY: "/api/ai/key",
   AI_COMMAND: "/api/ai/command",
+  AI_TRANSCRIBE: "/api/ai/transcribe",
 } as const;

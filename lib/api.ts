@@ -22,6 +22,11 @@ interface RequestOptions {
   method?: string;
   /** JSON body (automatically serialised). */
   body?: unknown;
+  /**
+   * Multipart body (e.g. an audio upload). Takes precedence over `body`;
+   * Content-Type is left unset so fetch supplies the multipart boundary.
+   */
+  formData?: FormData;
   /** Extra headers merged with defaults. */
   headers?: Record<string, string>;
   /** Per-request timeout in ms (overrides default). */
@@ -98,14 +103,15 @@ async function rawFetch<T>(
   path: string,
   opts: RequestOptions = {},
 ): Promise<T> {
-  const { method = "GET", body, headers = {}, timeoutMs = DEFAULT_TIMEOUT_MS } = opts;
+  const { method = "GET", body, formData, headers = {}, timeoutMs = DEFAULT_TIMEOUT_MS } = opts;
 
   const url = `${baseUrl}${path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   const reqHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
+    // Multipart requests must not pin Content-Type — fetch adds the boundary.
+    ...(formData === undefined ? { "Content-Type": "application/json" } : {}),
     ...headers,
   };
 
@@ -122,7 +128,7 @@ async function rawFetch<T>(
     const response = await fetch(url, {
       method,
       headers: reqHeaders,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: formData !== undefined ? formData : body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
 
